@@ -1,10 +1,7 @@
 import subprocess
 import time
 import logging
-import threading
 from logging.handlers import RotatingFileHandler
-from pystray import Icon as icon, Menu as menu, MenuItem as item
-from PIL import Image, ImageDraw
 import signal
 
 # Logging Configurations
@@ -65,6 +62,45 @@ def adb_command(device_ip, command):
         logging.error(error_msg)
         return None
 
+# Function to connect to a device
+def connect_to_device(device_ip):
+    try:
+        result = subprocess.run(
+            f"adb connect {device_ip}",
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True
+        )
+        if "connected" in result.stdout:
+            logging.info(f"Successfully connected to {device_ip}")
+            return True
+        else:
+            logging.error(f"Failed to connect to {device_ip}: {result.stdout}")
+            return False
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error connecting to device {device_ip}: {e.stderr.strip()}")
+        return False
+
+# Function to restart ADB server
+def restart_adb_server():
+    try:
+        subprocess.run("adb kill-server", shell=True, check=True)
+        subprocess.run("adb start-server", shell=True, check=True)
+        logging.info("ADB server restarted")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error restarting ADB server: {e.stderr.strip()}")
+
+# Function to attempt reconnecting to a device
+def attempt_reconnect(device_ip, max_attempts=3):
+    for attempt in range(max_attempts):
+        logging.info(f"Attempting to reconnect to {device_ip}, attempt {attempt + 1}")
+        if connect_to_device(device_ip):
+            return True
+        time.sleep(5)  # Wait before retrying
+    return False
+
 # Function to get the currently focused app
 def get_focused_app(device_ip):
     command = "shell dumpsys window windows"
@@ -88,29 +124,38 @@ def restart_application(device_ip, package_name):
     adb_command(device_ip, f"shell am force-stop {package_name}")
     adb_command(device_ip, f"shell am start -n {package_name}/.MainActivity")
 
+# Function to process a single device
+def process_device(device_name, device_ip):
+    print(f"\nProcessing {device_name} - {device_ip}")
+    print("-" * 40)
+
+    if not connect_to_device(device_ip):
+        if not attempt_reconnect(device_ip):
+            logging.warning(f"Failed to connect to {device_ip} after initial attempts. Restarting ADB server...")
+            restart_adb_server()
+            if not attempt_reconnect(device_ip):
+                logging.error(f"Failed to connect to {device_ip} after ADB restart. Skipping...")
+                return
+
+    focused_app = get_focused_app(device_ip)
+    launcher_running = adb_command(device_ip, "shell pgrep -f com.gocheats.launcher")
+
+    if focused_app != "com.nianticlabs.pokemongo":
+        logging.warning(f"{device_ip}: Pokémon GO is not in focus. Restarting both apps...")
+        restart_application(device_ip, "com.nianticlabs.pokemongo")
+        restart_application(device_ip, "com.gocheats.launcher")
+    elif not launcher_running:
+        logging.warning(f"{device_ip}: Launcher is not running. Restarting launcher...")
+        restart_application(device_ip, "com.gocheats.launcher")
+    else:
+        logging.info(f"{device_ip}: Pokémon GO is in focus and Launcher is running.")
+
 # Main script logic
 def run_script():
     try:
-        adb_command('localhost', "start-server")
-
         while True:
-            for device, device_ip in devices.items():
-                print(f"\nProcessing {device} - {device_ip}")
-                print("-" * 40)
-
-                focused_app = get_focused_app(device_ip)
-                launcher_running = adb_command(device_ip, "shell pgrep -f com.gocheats.launcher")
-
-                if focused_app != "com.nianticlabs.pokemongo":
-                    logging.warning(f"{device}: Pokémon GO is not in focus. Restarting both apps...")
-                    restart_application(device_ip, "com.nianticlabs.pokemongo")
-                    restart_application(device_ip, "com.gocheats.launcher")
-                elif not launcher_running:
-                    logging.warning(f"{device}: Launcher is not running. Restarting launcher...")
-                    restart_application(device_ip, "com.gocheats.launcher")
-                else:
-                    logging.info(f"{device}: Pokémon GO is in focus and Launcher is running.")
-
+            for device_name, device_ip in devices.items():
+                process_device(device_name, device_ip)
                 time.sleep(5)  # Delay between processing each device
 
             time.sleep(60)  # Delay before next round of checks
@@ -118,35 +163,9 @@ def run_script():
     except KeyboardInterrupt:
         logging.info("Script termination requested. Exiting...")
 
-# Function to create an image for the system tray icon
-def create_image():
-    image = Image.new('RGB', (64, 64), color=(0, 0, 0))
-    d = ImageDraw.Draw(image)
-    d.rectangle([0, 0, 64, 64], fill=(255, 255, 255))
-    d.text((10, 10), "Run", fill=(0, 0, 0))
-    return image
-
-# Function to stop the icon and script
-def on_clicked(icon, item):
-    icon.stop()
-
-# Function to setup icon and start the script
-def setup(icon):
-    icon.visible = True
-    threading.Thread(target=run_script).start()
-
-# Function to run the system tray icon in a separate thread
-def run_system_tray():
-    icon('Device Monitor', create_image(), menu=menu(item('Quit', on_clicked))).run(setup)
-
 # Main function
 def main():
-    # Run the system tray icon in a separate thread
-    system_tray_thread = threading.Thread(target=run_system_tray)
-    system_tray_thread.start()
-
-    # Wait for the system tray thread to finish
-    system_tray_thread.join()
+    run_script()
 
 if __name__ == "__main__":
     # Set up a signal handler for graceful shutdown
