@@ -54,13 +54,17 @@ def adb_command(device_ip, command):
             stdout=subprocess.PIPE, 
             stderr=subprocess.PIPE, 
             text=True, 
-            check=True
+            check=True,
+            timeout=30  # Timeout in seconds
         )
         return result.stdout
     except subprocess.CalledProcessError as e:
         error_msg = f"Error running command: {e.cmd}, Error: {e.stderr.strip()}"
         logging.error(error_msg)
-        return None
+    except subprocess.TimeoutExpired:
+        logging.error(f"Timeout expired for command: {command}")
+    return None
+
 
 # Function to connect to a device
 def connect_to_device(device_ip):
@@ -71,7 +75,8 @@ def connect_to_device(device_ip):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            check=True
+            check=True,
+            timeout=30  # Timeout in seconds
         )
         if "connected" in result.stdout:
             logging.info(f"Successfully connected to {device_ip}")
@@ -86,11 +91,13 @@ def connect_to_device(device_ip):
 # Function to restart ADB server
 def restart_adb_server():
     try:
-        subprocess.run("adb kill-server", shell=True, check=True)
-        subprocess.run("adb start-server", shell=True, check=True)
+        subprocess.run("adb kill-server", shell=True, check=True, timeout=30)
+        subprocess.run("adb start-server", shell=True, check=True, timeout=30)
         logging.info("ADB server restarted")
     except subprocess.CalledProcessError as e:
         logging.error(f"Error restarting ADB server: {e.stderr.strip()}")
+    except subprocess.TimeoutExpired:
+        logging.error("Timeout expired while restarting ADB server")
 
 # Function to attempt reconnecting to a device
 def attempt_reconnect(device_ip, max_attempts=3):
@@ -162,6 +169,8 @@ def run_script():
 
     except KeyboardInterrupt:
         logging.info("Script termination requested. Exiting...")
+        # Perform any necessary cleanup here
+        sys.exit(0)  # Ensure the script exits
 
 # Main function
 def main():
